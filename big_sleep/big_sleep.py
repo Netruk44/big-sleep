@@ -23,8 +23,6 @@ from big_sleep.resample import resample
 from big_sleep.biggan import BigGAN
 from big_sleep.clip import load, tokenize
 
-assert torch.cuda.is_available(), 'CUDA must be available in order to use Big Sleep'
-
 # graceful keyboard interrupt
 
 terminate = False
@@ -346,7 +344,7 @@ class Imagine(nn.Module):
             ema_decay = ema_decay,
             num_cutouts = num_cutouts,
             center_bias = center_bias,
-        ).cuda()
+        )
 
         self.model = model
 
@@ -383,7 +381,7 @@ class Imagine(nn.Module):
         self.text = text
         self.img = img
         if encoding is not None:
-            encoding = encoding.cuda()
+            encoding = encoding
         #elif self.create_story:
         #    encoding = self.update_story_encoding(epoch=0, iteration=1)
         elif text is not None and img is not None:
@@ -395,7 +393,7 @@ class Imagine(nn.Module):
         return encoding
 
     def create_text_encoding(self, text):
-        tokenized_text = tokenize(text).cuda()
+        tokenized_text = tokenize(text)
         with torch.no_grad():
             text_encoding = perceptor.encode_text(tokenized_text).detach()
         return text_encoding
@@ -403,7 +401,7 @@ class Imagine(nn.Module):
     def create_img_encoding(self, img):
         if isinstance(img, str):
             img = Image.open(img)
-        normed_img = self.clip_transform(img).unsqueeze(0).cuda()
+        normed_img = self.clip_transform(img).unsqueeze(0)
         with torch.no_grad():
             img_encoding = perceptor.encode_image(normed_img).detach()
         return img_encoding
@@ -436,7 +434,7 @@ class Imagine(nn.Module):
 
     def reset(self):
         self.model.reset()
-        self.model = self.model.cuda()
+        self.model = self.model
         self.optimizer = Adam(self.model.model.latents.parameters(), self.lr)
 
     def train_step(self, epoch, i, pbar=None):
