@@ -5,6 +5,7 @@ import signal
 import string
 import re
 
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 import random
@@ -24,6 +25,31 @@ from big_sleep.biggan import BigGAN
 from big_sleep.clip import load, tokenize
 
 assert torch.cuda.is_available(), 'CUDA must be available in order to use Big Sleep'
+
+
+# lookahead
+class Lookahead(torch.optim.Optimizer):
+    def __init__(self, optimizer, alpha=0.5):
+        self.optimizer = optimizer
+        self.alpha = alpha
+        self.param_groups = self.optimizer.param_groups
+        self.state = defaultdict(dict)
+
+    def lookahead_step(self):
+        for group in self.param_groups:
+            for fast in group["params"]:
+                param_state = self.state[fast]
+                if "slow_params" not in param_state:
+                    param_state["slow_params"] = torch.zeros_like(fast.data)
+                    param_state["slow_params"].copy_(fast.data)
+                slow = param_state["slow_params"]
+                # slow <- slow + alpha * (fast - slow)
+                slow += (fast.data - slow) * self.alpha
+                fast.data.copy_(slow)
+
+    def step(self, closure = None):
+        loss = self.optimizer.step(closure)
+        return loss
 
 # graceful keyboard interrupt
 
@@ -318,6 +344,7 @@ class Imagine(nn.Module):
         ema_decay = 0.99,
         num_cutouts = 128,
         center_bias = False,
+        lookahead_k = 5
     ):
         super().__init__()
 
@@ -351,7 +378,7 @@ class Imagine(nn.Module):
         self.model = model
 
         self.lr = lr
-        self.optimizer = Adam(model.model.latents.model.parameters(), lr)
+        self.optimizer = Lookahead(Adam(model.model.latents.model.parameters(), lr), 0.1)
         self.gradient_accumulate_every = gradient_accumulate_every
         self.save_every = save_every
 
@@ -371,6 +398,8 @@ class Imagine(nn.Module):
         self.clip_transform = create_clip_img_transform(224)
         # create starting encoding
         self.set_clip_encoding(text=text, img=img, encoding=encoding, text_min=text_min)
+
+        self.lookahead_k = lookahead_k
     
     @property
     def seed_suffix(self):
@@ -438,7 +467,7 @@ class Imagine(nn.Module):
     def reset(self):
         self.model.reset()
         self.model = self.model.cuda()
-        self.optimizer = Adam(self.model.model.latents.parameters(), self.lr)
+        self.optimizer = Lookahead(Adam(self.model.model.latents.parameters(), self.lr), 0.1)
 
     def train_step(self, epoch, i, pbar=None):
         total_loss = 0
@@ -452,6 +481,9 @@ class Imagine(nn.Module):
         self.optimizer.step()
         self.model.model.latents.update()
         self.optimizer.zero_grad()
+
+        if (i + 1) % self.lookahead_k == 0:
+            self.optimizer.lookahead_step()
 
         if (i + 1) % self.save_every == 0:
             with torch.no_grad():
